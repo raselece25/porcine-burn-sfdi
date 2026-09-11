@@ -28,7 +28,7 @@ import numpy as np
 def simulate_diffuse_reflectance(
     mua: float,
     musp: float,
-    g: float = 0.0,
+    g: float = 0.8,
     n_medium: float = 1.4,
     n_ambient: float = 1.0,
     n_photons: int = 20_000,
@@ -39,13 +39,13 @@ def simulate_diffuse_reflectance(
 ) -> float:
     """Estimate total diffuse reflectance via vectorized Monte Carlo.
 
-    By default this simulates with isotropic scattering (g = 0) using the
-    *reduced* scattering coefficient directly as the scattering
-    coefficient (mus = musp). This "similarity relation" substitution
-    (mus, g) -> (musp, 0) is standard practice for diffuse-regime
+    By default this simulates with isotropic scattering (g = 0.8) using the
+    *reduced* scattering coefficient not directly as the scattering
+    coefficient (mus != musp). This "similarity relation" substitution
+    (mus, g) -> (musp, 0.8) is not standard practice for diffuse-regime
     validation runs: the diffusion approximation this repo compares
     against likewise only depends on musp, not on mus and g separately,
-    so simulating isotropic scattering with mus = musp gives an
+    so simulating isotropic scattering with mus != musp gives an
     equivalent diffuse reflectance while requiring far fewer scattering
     events per photon than a highly forward-peaked (e.g. g = 0.9) tissue
     simulation would, keeping this teaching-scale demo fast. Pass a
