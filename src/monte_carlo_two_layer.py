@@ -1,42 +1,54 @@
 """
 monte_carlo_two_layer.py
 
-Two-layer extension of the single-layer `simulate_diffuse_reflectance`
-Monte Carlo photon-transport model in `monte_carlo.py`, following the same
-photon-packet weighting scheme described in:
+Standalone two-layer Monte Carlo photon-transport simulator for a turbid
+medium with a finite top layer over a semi-infinite bottom layer -- e.g.
+epidermis over dermis. Self-contained: no import of / dependency on a
+single-layer model.
+
+Follows the standard photon-packet weighting scheme described in:
 
     L. Wang, S. L. Jacques, L. Zheng, "MCML -- Monte Carlo modeling of
     light transport in multi-layered tissues," Comput. Methods Programs
     Biomed. 47(2), 131-146 (1995).
 
-Layer 1 occupies 0 <= z < thickness1 (e.g. epidermis); layer 2 occupies
-z >= thickness1 and is semi-infinite (e.g. dermis). Still teaching-scale:
-total diffuse reflectance only, no spatial-frequency modulation, no
-lateral photon-position tallying.
+Motivation (why two layers, not homogeneous): Poon, "Early Assessment of
+Burn Severity in Human Tissue with Multi-Wavelength Spatial Frequency
+Domain Imaging" (M.S. thesis, Wright State Univ., 2016), Sec. 4.5.1 and
+Ch. 5, shows via a single-layer-vs-two-layer Monte Carlo comparison
+(Wang et al.'s MC code) that fitting burned skin with a homogeneous
+diffusion model can lose real physiological information, since even
+plain skin is at least epidermis + dermis, and proposes resolving the
+top layer's (mu_a1, mu_s1') with high spatial frequencies plus an
+independent layer-thickness measurement (there, HFUS), then fitting the
+bottom layer's (mu_a2, mu_s2') at low spatial frequencies. This module
+is a from-scratch two-layer forward model in that same spirit, useful
+as an independent MC check for that kind of two-layer SFDI fit.
 
-Boundary bookkeeping (the actual two-layer addition):
+Layer 1 occupies 0 <= z < thickness1; layer 2 occupies z >= thickness1
+and is semi-infinite. Teaching-scale: total diffuse reflectance only, no
+spatial-frequency modulation, no lateral photon-position tallying.
 
-A photon's step is drawn once as a dimensionless number of mean free
-paths (`rem`, ~Exp(1)). By the memoryless property of the exponential
-distribution, this budget is valid regardless of which layer's mu_t
-converts it to physical distance, so it carries unchanged across a
-layer boundary. Each outer-loop iteration therefore does ONE of two
-things per photon: (a) the remaining budget is smaller than the
-distance-to-boundary, so the photon reaches its next scattering site
-inside the current layer -- absorption is deposited and a new HG
-scattering direction is drawn (exactly as in the single-layer model,
-just parameterized per-layer), and a fresh `rem` is drawn for the next
-hop; or (b) the boundary is reached first, so the photon is moved
-exactly to the boundary, `rem` is decremented by the distance already
-spent, and Fresnel reflection/Snell refraction decides whether it
-reflects back into the same layer or transmits into the other one
-(or, at the top surface, escapes as diffuse reflectance). No new `rem`
-is drawn in this branch -- the same hop keeps resolving on subsequent
-iterations, so `max_steps` bounds "scatters + crossings" combined
-rather than only scatters.
+Boundary bookkeeping: a photon's step is drawn once as a dimensionless
+number of mean free paths (`rem`, ~Exp(1)). By the memoryless property
+of the exponential distribution this budget is valid regardless of
+which layer's mu_t converts it to physical distance, so it carries
+unchanged across a layer boundary. Each outer-loop iteration does ONE
+of two things per photon: (a) the remaining budget is smaller than the
+distance to the next boundary, so the photon reaches its next
+scattering site inside the current layer -- absorption is deposited and
+a new Henyey-Greenstein scattering direction is drawn, then a fresh
+`rem` is drawn for the next hop; or (b) the boundary is reached first,
+so the photon is moved exactly there, `rem` is decremented by the
+distance already spent, and Fresnel reflection / Snell refraction
+decides whether it reflects back into the same layer, transmits into
+the other layer, or (at the top surface) escapes as diffuse
+reflectance. No new `rem` is drawn in branch (b) -- the same hop keeps
+resolving on later iterations, so `max_steps` bounds "scatters +
+crossings" combined.
 
-ponytail: thin layer1 relative to a mean free path means more boundary
-crossings are needed to resolve each hop, which eats into the same
+ponytail: a layer 1 much thinner than a mean free path needs more
+boundary crossings to resolve each hop, which eats into the same
 max_steps budget used for actual scattering events -- if convergence
 looks off for a very thin/high-scattering layer 1, raise max_steps
 first before suspecting the physics.
@@ -45,8 +57,6 @@ first before suspecting the physics.
 from __future__ import annotations
 
 import numpy as np
-
-from monte_carlo import _fresnel_reflectance, _rotate_direction
 
 
 def simulate_diffuse_reflectance_two_layer(
@@ -70,21 +80,31 @@ def simulate_diffuse_reflectance_two_layer(
 
     Parameters
     ----------
-    mua1, musp1, g1, n1 : layer-1 (top) optical properties [mm^-1], anisotropy,
-        refractive index.
-    mua2, musp2, g2, n2 : layer-2 (semi-infinite) optical properties, same units.
+    mua1, musp1, g1, n1 : layer-1 (top, e.g. epidermis) optical properties
+        [mm^-1], anisotropy, refractive index.
+    mua2, musp2, g2, n2 : layer-2 (semi-infinite, e.g. dermis) optical
+        properties, same units.
     thickness1 : float [mm]
         Layer-1 thickness. Layer 2 extends from thickness1 to infinity.
-    n_ambient, n_photons, weight_threshold, roulette_m, max_steps, seed :
-        Same meaning as in `simulate_diffuse_reflectance`.
+    n_ambient : float
+        Refractive index of the medium above the tissue (air).
+    n_photons : int
+        Number of photon packets to launch.
+    weight_threshold, roulette_m : float, int
+        Russian-roulette termination parameters.
+    max_steps : int
+        Hard cap on scatters + boundary crossings per photon (safety limit).
+    seed : int or None
+        RNG seed for reproducibility.
 
     Returns
     -------
     rd : float
-        Estimated total diffuse reflectance at fx = 0. Passing identical
-        (mua2, musp2, g2, n2) == (mua1, musp1, g1, n1) should reproduce
-        `simulate_diffuse_reflectance(mua1, musp1, g1, n1, ...)` within
-        Monte Carlo noise -- that's the sanity check in `demo()` below.
+        Estimated total diffuse reflectance at fx = 0. Passing
+        thickness1 = 0 (or making layer 2 identical to layer 1) should
+        make this equivalent to a homogeneous-medium simulation with
+        layer 1's properties -- see `demo()` below for a self-contained
+        check of exactly that.
     """
     rng = np.random.default_rng(seed)
     mus1, mus2 = musp1 / (1.0 - g1), musp2 / (1.0 - g2)
@@ -207,6 +227,56 @@ def simulate_diffuse_reflectance_two_layer(
     return reflected_weight / n_photons
 
 
+def _fresnel_reflectance(cos_i: np.ndarray, n1: float, n2: float) -> np.ndarray:
+    """Unpolarized Fresnel reflectance at an interface, with total internal
+    reflection handled explicitly. (Inlined here so this module has no
+    dependency on the single-layer model.)"""
+    sin_i = np.sqrt(np.clip(1.0 - cos_i**2, 0.0, 1.0))
+    sin_t = n1 / n2 * sin_i
+    tir = sin_t >= 1.0
+    sin_t_c = np.clip(sin_t, 0.0, 1.0 - 1e-12)
+    cos_t = np.sqrt(1.0 - sin_t_c**2)
+
+    rs = ((n1 * cos_i - n2 * cos_t) / (n1 * cos_i + n2 * cos_t)) ** 2
+    rp = ((n1 * cos_t - n2 * cos_i) / (n1 * cos_t + n2 * cos_i)) ** 2
+    r = 0.5 * (rs + rp)
+    r = np.where(tir, 1.0, r)
+    return r
+
+
+def _rotate_direction(
+    d: np.ndarray, cos_theta: np.ndarray, sin_theta: np.ndarray, phi: np.ndarray
+) -> np.ndarray:
+    """Rotate each direction vector in d by polar angle theta and azimuth
+    phi (Henyey-Greenstein scattering step). Inlined -- no external
+    dependency."""
+    ux, uy, uz = d[:, 0], d[:, 1], d[:, 2]
+    cos_phi, sin_phi = np.cos(phi), np.sin(phi)
+
+    denom = np.sqrt(np.clip(1.0 - uz**2, 1e-12, None))
+    near_pole = np.abs(uz) > 0.99999
+
+    new_x = np.where(
+        near_pole,
+        sin_theta * cos_phi,
+        sin_theta * (ux * uz * cos_phi - uy * sin_phi) / denom + ux * cos_theta,
+    )
+    new_y = np.where(
+        near_pole,
+        sin_theta * sin_phi,
+        sin_theta * (uy * uz * cos_phi + ux * sin_phi) / denom + uy * cos_theta,
+    )
+    new_z = np.where(
+        near_pole,
+        np.sign(uz) * cos_theta,
+        -sin_theta * cos_phi * denom + uz * cos_theta,
+    )
+
+    out = np.stack([new_x, new_y, new_z], axis=1)
+    norm = np.linalg.norm(out, axis=1, keepdims=True)
+    return out / np.clip(norm, 1e-12, None)
+
+
 def _refract_direction(d: np.ndarray, n_from: np.ndarray, n_to: np.ndarray) -> np.ndarray:
     """Snell's-law refraction at a horizontal (z = const) layer boundary,
     preserving the photon's up/down travel sense. Only called on photons
@@ -224,34 +294,72 @@ def _refract_direction(d: np.ndarray, n_from: np.ndarray, n_to: np.ndarray) -> n
 
 
 def demo() -> None:
-    """Sanity check: a two-layer medium with identical layer-1/layer-2
-    optical properties should reproduce the single-layer model's Rd
-    within Monte Carlo noise."""
-    from monte_carlo import simulate_diffuse_reflectance
+    """Self-contained sanity checks (no external model needed):
 
+    1. thickness1 = 0 (layer 1 has zero thickness) must give the same Rd
+       as a homogeneous medium with layer 2's properties, regardless of
+       what layer 1's properties are set to, since no photon can ever
+       occupy a zero-thickness layer.
+    2. A two-layer medium where layer 2 is identical to layer 1 must
+       match a "thick homogeneous layer1" run (thickness1 huge) within
+       Monte Carlo noise -- both describe the same physical medium.
+    3. Increasing mua1 (holding everything else fixed) must not increase
+       Rd -- more absorption near the surface can only reduce or match
+       the diffuse reflectance.
+    4. Rd must always be a valid fraction in [0, 1].
+    """
     mua, musp, g, n = 0.01, 1.0, 0.8, 1.4
-    n_photons = 60_000
+    # ponytail: this low-mua regime needs most photons to run close to the
+    # full max_steps budget before Russian roulette culls them (nothing to
+    # do with layer count), so keep n_photons modest here or these checks
+    # get slow -- bump it if you want tighter noise margins.
+    n_photons = 20_000
 
-    rd_single = simulate_diffuse_reflectance(
-        mua, musp, g=g, n_medium=n, n_photons=n_photons, seed=1
+    # (1) zero-thickness top layer <=> homogeneous layer 2.
+    rd_zero_top = simulate_diffuse_reflectance_two_layer(
+        mua1=0.5, musp1=5.0, mua2=mua, musp2=musp, thickness1=0.0,
+        g1=g, g2=g, n1=n, n2=n, n_photons=n_photons, seed=1,
     )
-    rd_two = simulate_diffuse_reflectance_two_layer(
+    rd_homog2 = simulate_diffuse_reflectance_two_layer(
+        mua1=mua, musp1=musp, mua2=mua, musp2=musp, thickness1=1e6,
+        g1=g, g2=g, n1=n, n2=n, n_photons=n_photons, seed=1,
+    )
+    rel_diff = abs(rd_zero_top - rd_homog2) / rd_homog2
+    print(f"zero-thickness top layer Rd = {rd_zero_top:.4f}, "
+          f"homogeneous (layer-2 props) Rd = {rd_homog2:.4f}, rel diff = {rel_diff:.2%}")
+    assert rel_diff < 0.15
+
+    # (2) identical layers <=> thick homogeneous layer-1 medium.
+    rd_two_identical = simulate_diffuse_reflectance_two_layer(
         mua, musp, mua, musp, thickness1=0.5, g1=g, g2=g, n1=n, n2=n,
-        n_photons=n_photons, seed=1,
-    )
-    rel_diff = abs(rd_two - rd_single) / rd_single
-    print(f"single-layer Rd = {rd_single:.4f}, two-layer (identical) Rd = {rd_two:.4f}, "
-          f"relative diff = {rel_diff:.2%}")
-    assert rel_diff < 0.15, "two-layer model should match single-layer when layers are identical"
-
-    # A more absorbing/scattering layer 2 underneath a thin layer 1 should
-    # measurably change Rd relative to a homogeneous layer-1-only medium.
-    rd_layered = simulate_diffuse_reflectance_two_layer(
-        mua, musp, mua2=0.05, musp2=2.0, thickness1=0.1, g1=g, g2=g, n1=n, n2=n,
         n_photons=n_photons, seed=2,
     )
-    print(f"thin layer1 over a more absorbing layer2: Rd = {rd_layered:.4f}")
-    assert 0.0 <= rd_layered <= 1.0
+    rd_thick_layer1 = simulate_diffuse_reflectance_two_layer(
+        mua, musp, mua2=5.0, musp2=50.0, thickness1=50.0, g1=g, g2=g, n1=n, n2=n,
+        n_photons=n_photons, seed=2,
+    )
+    rel_diff2 = abs(rd_two_identical - rd_thick_layer1) / rd_thick_layer1
+    print(f"identical-layers Rd = {rd_two_identical:.4f}, "
+          f"thick-layer1 (layer2 irrelevant) Rd = {rd_thick_layer1:.4f}, "
+          f"rel diff = {rel_diff2:.2%}")
+    assert rel_diff2 < 0.15
+
+    # (3) monotonicity: more absorbing top layer -> lower or equal Rd.
+    rd_low_mua1 = simulate_diffuse_reflectance_two_layer(
+        mua1=0.005, musp1=musp, mua2=mua, musp2=musp, thickness1=0.2,
+        g1=g, g2=g, n1=n, n2=n, n_photons=n_photons, seed=3,
+    )
+    rd_high_mua1 = simulate_diffuse_reflectance_two_layer(
+        mua1=0.2, musp1=musp, mua2=mua, musp2=musp, thickness1=0.2,
+        g1=g, g2=g, n1=n, n2=n, n_photons=n_photons, seed=3,
+    )
+    print(f"low mua1 Rd = {rd_low_mua1:.4f}, high mua1 Rd = {rd_high_mua1:.4f}")
+    assert rd_high_mua1 < rd_low_mua1
+
+    # (4) always a valid fraction.
+    for rd in (rd_zero_top, rd_homog2, rd_two_identical, rd_thick_layer1,
+               rd_low_mua1, rd_high_mua1):
+        assert 0.0 <= rd <= 1.0
 
 
 if __name__ == "__main__":
