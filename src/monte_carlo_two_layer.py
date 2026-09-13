@@ -12,10 +12,7 @@ Follows the standard photon-packet weighting scheme described in:
     light transport in multi-layered tissues," Comput. Methods Programs
     Biomed. 47(2), 131-146 (1995).
 
-Motivation (why two layers, not homogeneous): Poon, "Early Assessment of
-Burn Severity in Human Tissue with Multi-Wavelength Spatial Frequency
-Domain Imaging" (M.S. thesis, Wright State Univ., 2016), Sec. 4.5.1 and
-Ch. 5, shows via a single-layer-vs-two-layer Monte Carlo comparison
+Motivation (why two layers, not homogeneous): a single-layer-vs-two-layer Monte Carlo comparison
 (Wang et al.'s MC code) that fitting burned skin with a homogeneous
 diffusion model can lose real physiological information, since even
 plain skin is at least epidermis + dermis, and proposes resolving the
@@ -31,7 +28,7 @@ spatial-frequency modulation, no lateral photon-position tallying.
 
 Boundary bookkeeping: a photon's step is drawn once as a dimensionless
 number of mean free paths (`rem`, ~Exp(1)). By the memoryless property
-of the exponential distribution this budget is valid regardless of
+of the exponential distribution, this budget is valid regardless of
 which layer's mu_t converts it to physical distance, so it carries
 unchanged across a layer boundary. Each outer-loop iteration does ONE
 of two things per photon: (a) the remaining budget is smaller than the
@@ -67,7 +64,7 @@ def simulate_diffuse_reflectance_two_layer(
     thickness1: float,
     g1: float = 0.8,
     g2: float = 0.8,
-    n1: float = 1.4,
+    n1: float = 1.4, # It could be some times higher ~1.5
     n2: float = 1.4,
     n_ambient: float = 1.0,
     n_photons: int = 20_000,
