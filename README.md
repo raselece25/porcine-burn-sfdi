@@ -41,7 +41,7 @@ purposes.
    `invertOpticalProperties.m`): recovers per-pixel `(mu_a, mu_s')` from
    multi-frequency measurements by matching against a precomputed forward
    grid.
-4. **Monte Carlo cross-check** (`src/monte_carlo.py`): an independent,
+4. **Monte Carlo cross-check** (`src/monte_carlo.py & src/monte_carlo.py`): an independent,
    vectorized single-layer Monte Carlo photon-transport simulator
    (Wang, Jacques & Zheng, *Comput. Methods Programs Biomed.* 47(2),
    131-146, 1995) used as a rough, qualitative cross-check against the
